@@ -6,75 +6,58 @@
  * - 4 MIDI control buttons
  * - 16 MIDI channels selection
  * - Battery monitoring with charging indication
- * - LCD display for status
- * - Auto-reconnect to paired devices
- * - Sleep mode for power saving
+ * - I2C LCD display with custom battery/bluetooth icons
+ * - Deep sleep power management
  * 
- * Author: DestriMidi Project
- * Version: 1.0.0
+ * Hardware:
+ * - ESP32 (Upesy WROOM)
+ * - I2C LCD 16x2
+ * - 6 tactile buttons
+ * - Battery voltage divider on GPIO34
+ * - Charging status from TP4056 on GPIO35
+ * - Power/Status LEDs
+ * 
+ * Author: Florent DESTRIBOIS with Claude Code assistance
+ * Version: 2.0.0
  */
 
-#include <Arduino.h>
-#include <Wire.h>
-#include <LiquidCrystal_I2C.h>
-#include <Preferences.h>
-#include <BLEDevice.h>
-#include <BLEUtils.h>
-#include <BLEServer.h>
-#include <BLE2902.h>
-
-// Module includes
 #include "config.h"
 #include "MidiHandler.h"
-#include "DisplayManager.h"
 #include "ButtonManager.h"
+#include "DisplayManager.h"
 #include "BatteryManager.h"
 #include "ConfigManager.h"
 
-// Global objects
-LiquidCrystal_I2C lcd(LCD_ADDRESS, 16, 2);
-Preferences preferences;
-MidiHandler midiHandler;
-DisplayManager displayManager(&lcd);
-ButtonManager buttonManager;
-BatteryManager batteryManager;
-ConfigManager configManager(&preferences);
-
-// BLE objects
-BLEServer* pServer = nullptr;
-BLECharacteristic* pCharacteristic = nullptr;
-bool deviceConnected = false;
-bool oldDeviceConnected = false;
-
-// System state
+// System state structure
 SystemState systemState = {
-    .midiChannel = 1,
     .isConnected = false,
-    .batteryLevel = 100,
+    .currentChannel = 1,
+    .batteryLevel = 0,
     .isCharging = false,
-    .isPairingMode = false,
-    .lastActivity = 0
+    .lastActivityTime = 0,
+    .isInDeepSleep = false
 };
 
-// Function declarations
-void initializePins();
-void initializeBLE();
-void handleButtonEvent(ButtonEvent event);
-void enterPairingMode();
-void performFactoryReset();
-void checkSleepMode();
-void enterSleepMode();
+// Global objects
+MidiHandler midiHandler;
+ButtonManager buttonManager;
+DisplayManager displayManager;
+BatteryManager batteryManager;
+ConfigManager configManager;
 
-// BLE Callbacks
-class MyServerCallbacks: public BLEServerCallbacks {
-    void onConnect(BLEServer* pServer) {
+// BLE connection state
+volatile bool deviceConnected = false;
+
+// BLE Server Callbacks
+class ServerCallbacks: public BLEServerCallbacks {
+    void onConnect(BLEServer* pServer) override {
         deviceConnected = true;
         systemState.isConnected = true;
         digitalWrite(PIN_LED_BLUETOOTH, HIGH);
         Serial.println("BLE Client Connected");
     }
 
-    void onDisconnect(BLEServer* pServer) {
+    void onDisconnect(BLEServer* pServer) override {
         deviceConnected = false;
         systemState.isConnected = false;
         digitalWrite(PIN_LED_BLUETOOTH, LOW);
@@ -84,6 +67,95 @@ class MyServerCallbacks: public BLEServerCallbacks {
         pServer->startAdvertising();
     }
 };
+
+/**
+ * Initialize GPIO pins for LEDs, buttons, and other peripherals
+ */
+void initializePins() {
+    // Initialize LED pins
+    pinMode(PIN_LED_POWER, OUTPUT);
+    pinMode(PIN_LED_BLUETOOTH, OUTPUT);
+    pinMode(PIN_LED_CHARGING, OUTPUT);
+    pinMode(PIN_LED_ACTIVITY, OUTPUT);
+    
+    // Set initial LED states
+    digitalWrite(PIN_LED_POWER, HIGH);        // Power on
+    digitalWrite(PIN_LED_BLUETOOTH, LOW);     // BLE off initially
+    digitalWrite(PIN_LED_CHARGING, LOW);      // Charging indicator
+    digitalWrite(PIN_LED_ACTIVITY, LOW);      // Activity LED
+    
+    // Initialize analog input pins
+    pinMode(PIN_BATTERY_VOLTAGE, INPUT);
+    pinMode(PIN_CHARGING_STATUS, INPUT_PULLUP);
+    
+    Serial.println("GPIO pins initialized");
+}
+
+/**
+ * Handle MIDI messages to be sent
+ */
+void handleMidiMessage(uint8_t channel, uint8_t control, uint8_t value) {
+    if (systemState.isConnected) {
+        midiHandler.sendControlChange(channel, control, value);
+        digitalWrite(PIN_LED_ACTIVITY, HIGH);
+        delay(ACTIVITY_LED_DURATION);
+        digitalWrite(PIN_LED_ACTIVITY, LOW);
+        Serial.printf("MIDI CC: Ch%d CC%d Val%d\n", channel + 1, control, value);
+    }
+}
+
+/**
+ * Handle button events from ButtonManager
+ */
+void handleButtonEvent(ButtonEvent event) {
+    systemState.lastActivityTime = millis();
+    
+    switch (event.type) {
+        case BUTTON_PRESS:
+            if (event.buttonIndex < 6) {
+                // Send MIDI control change for button press
+                uint8_t ccValue = 127; // Full velocity
+                handleMidiMessage(systemState.currentChannel - 1, event.buttonIndex + 1, ccValue);
+                displayManager.showActivity();
+            }
+            break;
+            
+        case BUTTON_LONG_PRESS:
+            if (event.buttonIndex == 4) { // Button 5 - Channel up
+                systemState.currentChannel = (systemState.currentChannel % 16) + 1;
+                configManager.saveChannel(systemState.currentChannel);
+                displayManager.updateChannel(systemState.currentChannel);
+                Serial.printf("Channel up: %d\n", systemState.currentChannel);
+            } else if (event.buttonIndex == 5) { // Button 6 - Channel down
+                systemState.currentChannel = (systemState.currentChannel == 1) ? 16 : systemState.currentChannel - 1;
+                configManager.saveChannel(systemState.currentChannel);
+                displayManager.updateChannel(systemState.currentChannel);
+                Serial.printf("Channel down: %d\n", systemState.currentChannel);
+            }
+            break;
+            
+        case BUTTON_COMBO_PAIRING:
+            Serial.println("Entering pairing mode...");
+            displayManager.showPairingMode();
+            midiHandler.startAdvertising();
+            break;
+            
+        case BUTTON_COMBO_BATTERY:
+            Serial.println("Showing battery level...");
+            float voltage = batteryManager.getVoltage();
+            uint8_t percentage = batteryManager.getPercentage();
+            bool charging = batteryManager.isCharging();
+            displayManager.showBattery(percentage, charging);
+            Serial.printf("Battery: %.2fV (%d%%) %s\n", voltage, percentage, charging ? "Charging" : "");
+            break;
+            
+        case BUTTON_COMBO_FACTORY_RESET:
+            Serial.println("Factory reset requested...");
+            configManager.factoryReset();
+            ESP.restart();
+            break;
+    }
+}
 
 void setup() {
     Serial.begin(115200);
@@ -95,251 +167,84 @@ void setup() {
     // Initialize components
     initializePins();
     
-    // Initialize LCD
-    lcd.init();
-    lcd.backlight();
-    displayManager.showBootScreen();
-    
-    // Load configuration
+    // Initialize managers in order
     configManager.begin();
-    systemState.midiChannel = configManager.getMidiChannel();
+    systemState.currentChannel = configManager.loadChannel();
     
-    // Initialize battery manager
+    displayManager.begin();
+    displayManager.updateChannel(systemState.currentChannel);
+    
     batteryManager.begin();
-    
-    // Initialize button manager
     buttonManager.begin();
     
-    // Initialize BLE MIDI
-    initializeBLE();
+    // Initialize MIDI handler with callback
+    midiHandler.begin("DestriMidi", new ServerCallbacks());
     
-    // Initialize MIDI handler with BLE characteristic
-    midiHandler.begin(pCharacteristic);
+    Serial.println("System initialized successfully");
+    Serial.printf("Current MIDI channel: %d\n", systemState.currentChannel);
     
-    // Update display
-    displayManager.updateDisplay(systemState);
-    
-    Serial.println("Setup complete!");
+    systemState.lastActivityTime = millis();
 }
 
 void loop() {
-    // Update battery status
-    batteryManager.update();
-    systemState.batteryLevel = batteryManager.getBatteryPercentage();
-    systemState.isCharging = batteryManager.isCharging();
+    unsigned long currentTime = millis();
     
-    // Process button events
+    // Update button states and handle events
     ButtonEvent event = buttonManager.update();
-    handleButtonEvent(event);
+    if (event.type != BUTTON_NONE) {
+        handleButtonEvent(event);
+    }
+    
+    // Update battery status periodically
+    if (currentTime - batteryManager.getLastReadTime() > BATTERY_READ_INTERVAL) {
+        batteryManager.update();
+        systemState.batteryLevel = batteryManager.getPercentage();
+        systemState.isCharging = batteryManager.isCharging();
+        
+        // Update charging LED
+        digitalWrite(PIN_LED_CHARGING, systemState.isCharging ? HIGH : LOW);
+    }
+    
+    // Update display
+    displayManager.update();
     
     // Handle BLE connection changes
-    if (deviceConnected != oldDeviceConnected) {
-        if (deviceConnected) {
-            Serial.println("Device connected - ready to send MIDI");
+    bool currentConnectionState = midiHandler.isConnected();
+    if (currentConnectionState != systemState.isConnected) {
+        systemState.isConnected = currentConnectionState;
+        digitalWrite(PIN_LED_BLUETOOTH, systemState.isConnected ? HIGH : LOW);
+        
+        if (systemState.isConnected) {
+            Serial.println("BLE Connected");
+            displayManager.showConnected();
         } else {
-            Serial.println("Device disconnected");
+            Serial.println("BLE Disconnected");
+            displayManager.showDisconnected();
         }
-        oldDeviceConnected = deviceConnected;
-        displayManager.updateDisplay(systemState);
     }
     
-    // Update display periodically
-    static unsigned long lastDisplayUpdate = 0;
-    if (millis() - lastDisplayUpdate > 1000) {
-        lastDisplayUpdate = millis();
-        displayManager.updateDisplay(systemState);
-    }
-    
-    // Check for inactivity and enter sleep mode
-    checkSleepMode();
-    
-    // Small delay to prevent watchdog issues
-    delay(10);
-}
-
-void initializePins() {
-    // LED pins
-    pinMode(PIN_LED_POWER, OUTPUT);
-    pinMode(PIN_LED_BLUETOOTH, OUTPUT);
-    pinMode(PIN_LED_CHARGING, OUTPUT);
-    
-    // Turn on power LED
-    digitalWrite(PIN_LED_POWER, HIGH);
-    digitalWrite(PIN_LED_BLUETOOTH, LOW);
-    digitalWrite(PIN_LED_CHARGING, LOW);
-    
-    // Battery monitoring
-    pinMode(PIN_BATTERY_VOLTAGE, INPUT);
-    pinMode(PIN_CHARGING_STATUS, INPUT_PULLUP);
-}
-
-void initializeBLE() {
-    // Create BLE Device
-    BLEDevice::init(DEVICE_NAME);
-    
-    // Create BLE Server
-    pServer = BLEDevice::createServer();
-    pServer->setCallbacks(new MyServerCallbacks());
-    
-    // Create BLE Service
-    BLEService *pService = pServer->createService(BLEUUID(MIDI_SERVICE_UUID));
-    
-    // Create BLE Characteristic for MIDI
-    pCharacteristic = pService->createCharacteristic(
-        BLEUUID(MIDI_CHARACTERISTIC_UUID),
-        BLECharacteristic::PROPERTY_READ |
-        BLECharacteristic::PROPERTY_WRITE |
-        BLECharacteristic::PROPERTY_NOTIFY |
-        BLECharacteristic::PROPERTY_WRITE_NR
-    );
-    
-    // Add descriptor
-    pCharacteristic->addDescriptor(new BLE2902());
-    
-    // Start the service
-    pService->start();
-    
-    // Start advertising
-    BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-    pAdvertising->addServiceUUID(BLEUUID(MIDI_SERVICE_UUID));
-    pAdvertising->setScanResponse(true);
-    pAdvertising->setMinPreferred(0x06);
-    pAdvertising->setMinPreferred(0x12);
-    BLEDevice::startAdvertising();
-    
-    Serial.println("BLE MIDI Service started, waiting for connections...");
-}
-
-void handleButtonEvent(ButtonEvent event) {
-    if (event.type == BUTTON_NONE) return;
-    
-    // Update last activity time
-    systemState.lastActivity = millis();
-    
-    // Handle pairing mode (Button 1 + Button 2)
-    if (buttonManager.isPairingCombo()) {
-        enterPairingMode();
-        return;
-    }
-    
-    // Handle factory reset (Button 5 + Button 6 long press)
-    if (buttonManager.isFactoryResetCombo()) {
-        performFactoryReset();
-        return;
-    }
-    
-    // Handle button events based on button number
-    switch (event.buttonNumber) {
-        case 1:
-        case 2:
-        case 3:
-        case 4:
-        case 5:
-        case 6:
-            // All buttons send MIDI CC on normal press
-            if (event.type == BUTTON_PRESS && deviceConnected) {
-                uint8_t ccNumber = event.buttonNumber; // CC#1-6
-                midiHandler.sendControlChange(systemState.midiChannel, ccNumber, 127);
-                displayManager.showMidiSent(ccNumber, systemState.midiChannel);
-            }
-            // Buttons 5 and 6 also handle channel change on long press
-            else if (event.type == BUTTON_LONG_PRESS) {
-                if (event.buttonNumber == 5) {
-                    // Channel Up
-                    systemState.midiChannel++;
-                    if (systemState.midiChannel > 16) systemState.midiChannel = 1;
-                    configManager.setMidiChannel(systemState.midiChannel);
-                    displayManager.showChannelChange(systemState.midiChannel);
-                } else if (event.buttonNumber == 6) {
-                    // Channel Down
-                    systemState.midiChannel--;
-                    if (systemState.midiChannel < 1) systemState.midiChannel = 16;
-                    configManager.setMidiChannel(systemState.midiChannel);
-                    displayManager.showChannelChange(systemState.midiChannel);
-                }
-            }
-            break;
-    }
-}
-
-void enterPairingMode() {
-    Serial.println("Entering pairing mode...");
-    systemState.isPairingMode = true;
-    
-    // Clear any existing bonds
-    // Note: ESP32 doesn't have a simple way to clear bonds in Arduino
-    // Restart advertising with a different name temporarily
-    
-    displayManager.showPairingMode();
-    
-    // Blink Bluetooth LED
-    for (int i = 0; i < 10; i++) {
-        digitalWrite(PIN_LED_BLUETOOTH, HIGH);
-        delay(200);
-        digitalWrite(PIN_LED_BLUETOOTH, LOW);
-        delay(200);
-    }
-    
-    systemState.isPairingMode = false;
-    displayManager.updateDisplay(systemState);
-}
-
-void performFactoryReset() {
-    Serial.println("Performing factory reset...");
-    
-    displayManager.showFactoryReset();
-    
-    // Reset all settings
-    configManager.factoryReset();
-    systemState.midiChannel = 1;
-    
-    // Visual feedback
-    for (int i = 0; i < 3; i++) {
-        digitalWrite(PIN_LED_POWER, LOW);
+    // Check for sleep timeout
+    if (currentTime - systemState.lastActivityTime > SLEEP_TIMEOUT) {
+        Serial.println("Entering deep sleep...");
+        
+        // Show sleep message
+        displayManager.showSleep();
+        delay(1000);
+        
+        // Turn off all LEDs except power
         digitalWrite(PIN_LED_BLUETOOTH, LOW);
         digitalWrite(PIN_LED_CHARGING, LOW);
-        delay(200);
-        digitalWrite(PIN_LED_POWER, HIGH);
-        digitalWrite(PIN_LED_BLUETOOTH, HIGH);
-        digitalWrite(PIN_LED_CHARGING, HIGH);
-        delay(200);
+        digitalWrite(PIN_LED_ACTIVITY, LOW);
+        
+        // Turn off LCD backlight
+        displayManager.turnOff();
+        
+        // Configure wake up sources (any button press)
+        esp_sleep_enable_ext0_wakeup(GPIO_NUM_32, 0); // Wake on Button 1 press
+        
+        // Enter deep sleep
+        esp_deep_sleep_start();
     }
     
-    digitalWrite(PIN_LED_POWER, HIGH);
-    digitalWrite(PIN_LED_BLUETOOTH, LOW);
-    digitalWrite(PIN_LED_CHARGING, LOW);
-    
-    // Restart
-    delay(1000);
-    ESP.restart();
-}
-
-void checkSleepMode() {
-    // Enter sleep mode after 5 minutes of inactivity
-    if (millis() - systemState.lastActivity > SLEEP_TIMEOUT) {
-        if (!systemState.isCharging) {
-            enterSleepMode();
-        }
-    }
-}
-
-void enterSleepMode() {
-    Serial.println("Entering sleep mode...");
-    
-    // Show sleep message
-    displayManager.showSleepMode();
-    
-    // Turn off all LEDs
-    digitalWrite(PIN_LED_POWER, LOW);
-    digitalWrite(PIN_LED_BLUETOOTH, LOW);
-    digitalWrite(PIN_LED_CHARGING, LOW);
-    
-    // Turn off LCD backlight
-    lcd.noBacklight();
-    
-    // Configure wake up sources (any button press)
-    esp_sleep_enable_ext0_wakeup(GPIO_NUM_32, 0); // Wake on Button 1 press
-    
-    // Enter deep sleep
-    esp_deep_sleep_start();
+    delay(10); // Small delay for stability
 }
