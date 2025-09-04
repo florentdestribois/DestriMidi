@@ -8,27 +8,24 @@ This is an ESP32-based Bluetooth MIDI pedal controller project using Arduino fra
 
 ## Development Environment
 
-### Arduino IDE Configuration
-**Board**: ESP32 Dev Module
-- Upload Speed: 921600
-- CPU Frequency: 240MHz (WiFi/BT)  
-- Flash Frequency: 80MHz
-- Flash Mode: QIO
-- Flash Size: 4MB (32Mb)
-- Partition Scheme: Default 4MB with spiffs
+### PlatformIO Configuration
+**Platform**: espressif32
+**Board**: esp32dev
+**Framework**: Arduino
 
 ### Required Libraries
 - **LiquidCrystal I2C** by Frank de Brabander (v1.1.2+)
-- ESP32 BLE libraries (included with board package)
+- ESP32 BLE libraries (included with framework)
 
 ## Build and Upload Commands
 
-Since this is an Arduino project, there are no traditional build commands. Development workflow:
-
-1. **Compile**: Arduino IDE → Verify button (or Ctrl+R)
-2. **Upload**: Arduino IDE → Upload button (or Ctrl+U)
+### PlatformIO Commands
+1. **Build**: `pio run` or `platformio run`
+2. **Upload**: `pio run -t upload` or `platformio run --target upload`
    - May need to hold BOOT button on ESP32 during upload
-3. **Monitor Serial**: Arduino IDE → Tools → Serial Monitor (115200 baud)
+3. **Monitor Serial**: `pio device monitor` or `platformio device monitor` (115200 baud)
+4. **Clean**: `pio run -t clean`
+5. **Build & Upload**: `pio run -t upload --upload-port /dev/ttyUSB0` (adjust port as needed)
 
 ## Architecture
 
@@ -60,11 +57,8 @@ The codebase uses a modular architecture with separate managers for each subsyst
 ## Testing and Debugging
 
 ### I2C Scanner
-If LCD issues occur, run the I2C scanner:
-```
-File → Examples → Wire → i2c_scanner
-```
-Update `LCD_ADDRESS` in config.h if needed (0x27 or 0x3F).
+If LCD issues occur, use the I2C scanner example from the Wire library.
+Update `LCD_ADDRESS` in include/config.h if needed (0x27 or 0x3F).
 
 ### Serial Debug Output
 The code includes extensive Serial.print debugging at 115200 baud. Monitor for:
@@ -82,12 +76,12 @@ The code includes extensive Serial.print debugging at 115200 baud. Monitor for:
 ## Common Modifications
 
 ### Changing MIDI CC Numbers
-Edit `MIDI_CC_BUTTON_1` through `MIDI_CC_BUTTON_6` in config.h
+Edit `MIDI_CC_BUTTON_1` through `MIDI_CC_BUTTON_6` in include/config.h
 
 ### Adjusting Button Behavior
-- Long press timing: `LONG_PRESS_TIME` in config.h
-- Debounce delay: `DEBOUNCE_DELAY` in config.h
-- Sleep timeout: `SLEEP_TIMEOUT` in config.h
+- Long press timing: `LONG_PRESS_TIME` in include/config.h
+- Debounce delay: `DEBOUNCE_DELAY` in include/config.h
+- Sleep timeout: `SLEEP_TIMEOUT` in include/config.h
 
 ### Button Function Mapping
 All 6 buttons send MIDI CC on normal press. Buttons 5-6 additionally:
