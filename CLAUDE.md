@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is an ESP32-based Bluetooth MIDI pedal controller project using Arduino framework. The system sends MIDI Control Change (CC) messages over Bluetooth Low Energy (BLE) and includes battery management, LCD display, and configurable MIDI channels.
+This is an ESP32-based Bluetooth MIDI pedal controller project using Arduino framework. The system sends MIDI Control Change (CC) messages over Bluetooth Low Energy (BLE) and includes battery management, 7-segment display, and configurable MIDI channels.
 
 ## Development Environment
 
@@ -14,8 +14,9 @@ This is an ESP32-based Bluetooth MIDI pedal controller project using Arduino fra
 **Framework**: Arduino
 
 ### Required Libraries
-- **LiquidCrystal I2C** by Frank de Brabander (v1.1.2+)
 - ESP32 BLE libraries (included with framework)
+- Standard Arduino GPIO libraries (included)
+- No additional libraries required for 7-segment display
 
 ## Build and Upload Commands
 
@@ -32,33 +33,35 @@ This is an ESP32-based Bluetooth MIDI pedal controller project using Arduino fra
 ### Modular Design
 The codebase uses a modular architecture with separate managers for each subsystem:
 
-- **ESP32_MIDI_Pedal.ino**: Main application loop, BLE initialization, and event routing
-- **MidiHandler**: Manages BLE MIDI packet formatting and transmission
-- **ButtonManager**: Handles debouncing, long-press detection, and button combinations
-- **DisplayManager**: Controls LCD output with custom characters for battery/BT icons
-- **BatteryManager**: ADC voltage reading with moving average, charge detection
-- **ConfigManager**: Persistent storage using ESP32 Preferences API
-- **config.h**: Central configuration for pins, constants, and system settings
+- **src/main.cpp**: Main application with 7-segment display control and BLE MIDI
+- **7-Segment Display Functions**: Direct GPIO control for segments A-G and decimal point
+- **Button Handling**: Debouncing, long-press detection, and button combinations
+- **Battery Management**: ADC voltage reading with charging status detection
+- **BLE MIDI Protocol**: Standard MIDI service with 5-byte packet format
+- **Configuration Storage**: ESP32 Preferences API for persistent settings
 
 ### Key Design Patterns
 
 1. **Event-Driven Button Handling**: ButtonManager returns events (press/release/long-press) rather than states, allowing the main loop to handle complex combinations.
 
-2. **BLE MIDI Protocol**: Uses standard MIDI service UUID (03B80E5A-EDE8-4B33-A751-6CE34EC4C700) with 5-byte packet format for compatibility with DAWs.
+2. **7-Segment Display Control**: Direct GPIO manipulation with digit patterns for 0-F, special patterns for pairing mode and battery display.
 
-3. **Power Management**: Implements deep sleep with GPIO wake-up to maximize battery life when inactive.
+3. **BLE MIDI Protocol**: Uses standard MIDI service UUID (03B80E5A-EDE8-4B33-A751-6CE34EC4C700) with 5-byte packet format for compatibility with DAWs.
+
+4. **Power Management**: Implements deep sleep with GPIO wake-up to maximize battery life when inactive.
 
 ### Critical Pin Assignments
-- **I2C LCD**: SDA=GPIO21, SCL=GPIO22
+- **7-Segment Display**: A=GPIO21, B=GPIO22, C=GPIO19, D=GPIO23, E=GPIO18, F=GPIO5, G=GPIO17, DP=GPIO16
 - **Buttons**: GPIO32-33 (1-2), GPIO25-26 (3-4), GPIO27,14 (5-6)
+- **LEDs**: Power=GPIO12, Bluetooth=GPIO13, Charging=GPIO15, Activity=GPIO4
 - **Battery ADC**: GPIO34 (with 1:2 voltage divider)
 - **Charge Status**: GPIO35 (from TC4056)
 
 ## Testing and Debugging
 
-### I2C Scanner
-If LCD issues occur, use the I2C scanner example from the Wire library.
-Update `LCD_ADDRESS` in include/config.h if needed (0x27 or 0x3F).
+### 7-Segment Display Testing
+If display issues occur, test individual segments by setting GPIO pins HIGH/LOW.
+Verify common cathode connection to ground and check pin assignments in main.cpp.
 
 ### Serial Debug Output
 The code includes extensive Serial.print debugging at 115200 baud. Monitor for:
@@ -76,12 +79,13 @@ The code includes extensive Serial.print debugging at 115200 baud. Monitor for:
 ## Common Modifications
 
 ### Changing MIDI CC Numbers
-Edit `MIDI_CC_BUTTON_1` through `MIDI_CC_BUTTON_6` in include/config.h
+Edit the `ccNumbers[6]` array initialization in src/main.cpp (default: {1, 2, 3, 4, 5, 6})
 
 ### Adjusting Button Behavior
-- Long press timing: `LONG_PRESS_TIME` in include/config.h
-- Debounce delay: `DEBOUNCE_DELAY` in include/config.h
-- Sleep timeout: `SLEEP_TIMEOUT` in include/config.h
+- Long press timing: `LONG_PRESS_MS` in src/main.cpp
+- Debounce delay: `BUTTON_DEBOUNCE_MS` in src/main.cpp
+- Sleep timeout: `SLEEP_TIMEOUT_MS` in src/main.cpp
+- Battery read interval: `BATTERY_READ_INTERVAL_MS` in src/main.cpp
 
 ### Button Function Mapping
 All 6 buttons send MIDI CC on normal press. Buttons 5-6 additionally:

@@ -10,22 +10,33 @@
 #define DEVICE_VERSION "1.0.0"
 
 // Pin Definitions
-#define PIN_I2C_SDA 21
-#define PIN_I2C_SCL 22
-#define PIN_BATTERY_VOLTAGE 34
-#define PIN_CHARGING_STATUS 35
+// 7-Segment Display Pins
+#define PIN_SEG_A 21
+#define PIN_SEG_B 22
+#define PIN_SEG_C 19
+#define PIN_SEG_D 23
+#define PIN_SEG_E 18
+#define PIN_SEG_F 5
+#define PIN_SEG_G 17
+#define PIN_SEG_DP 16
+
+// Button Pins
 #define PIN_BUTTON_1 32
 #define PIN_BUTTON_2 33
 #define PIN_BUTTON_3 25
 #define PIN_BUTTON_4 26
 #define PIN_BUTTON_5 27
 #define PIN_BUTTON_6 14
+
+// LED Pins
 #define PIN_LED_POWER 12
 #define PIN_LED_BLUETOOTH 13
 #define PIN_LED_CHARGING 15
+#define PIN_LED_ACTIVITY 4
 
-// LCD Configuration
-#define LCD_ADDRESS 0x27  // or 0x3F, check with I2C scanner
+// Analog Pins
+#define PIN_BATTERY_VOLTAGE 34
+#define PIN_CHARGING_STATUS 35
 
 // Button Configuration
 #define DEBOUNCE_DELAY 50
@@ -55,6 +66,22 @@
 
 // Power Management
 #define SLEEP_TIMEOUT 300000  // 5 minutes in milliseconds
+#define ACTIVITY_LED_DURATION 50  // milliseconds
+#define BATTERY_READ_INTERVAL 10000  // 10 seconds
+
+// 7-Segment Display Configuration
+extern const int segmentPins[7];
+extern const byte digitPatterns[16];
+#define PATTERN_P 0b01110011  // P pattern for pairing
+#define PATTERN_BLANK 0b00000000  // All segments off
+
+// Display Modes
+enum DisplayMode {
+  MODE_CHANNEL,
+  MODE_BATTERY,
+  MODE_PAIRING,
+  MODE_ERROR
+};
 
 // System State Structure
 struct SystemState {
