@@ -4,16 +4,12 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <Preferences.h>
+#include <MD_MAX72xx.h>
 
-// 7-Segment Display Pins
-#define PIN_SEG_A 21
-#define PIN_SEG_B 22
-#define PIN_SEG_C 19
-#define PIN_SEG_D 23
-#define PIN_SEG_E 18
-#define PIN_SEG_F 5
-#define PIN_SEG_G 17
-#define PIN_SEG_DP 16
+// MAX7219 Matrix Display Pins
+#define MAX7219_DIN 21
+#define MAX7219_CLK 18
+#define MAX7219_CS 19
 
 // Button Pins
 #define PIN_BUTTON_1 32
@@ -21,20 +17,18 @@
 #define PIN_BUTTON_3 25
 #define PIN_BUTTON_4 26
 #define PIN_BUTTON_5 27
-#define PIN_BUTTON_6 0  // Changé de 14 vers 0 (GPIO fiable)
+#define PIN_BUTTON_6 14  // GPIO14 - Input/Output avec pull-up interne
 
 // LED Pins
-#define PIN_LED_POWER 12
-#define PIN_LED_BLUETOOTH 2  // Changé de 13 vers 2 (GPIO fiable)
-#define PIN_LED_CHARGING 15
-#define PIN_LED_ACTIVITY 4
+#define PIN_LED_CHARGING 15  // Green LED for charging indication
+#define PIN_LED_ACTIVITY 4   // Orange LED for button press indication
 
 // Analog Pins
-#define PIN_BATTERY_VOLTAGE 34
-#define PIN_CHARGING_STATUS 35
+#define PIN_BATTERY_VOLTAGE 35
+// #define PIN_CHARGING_STATUS 34  // Non utilisé (TC4056 4-pins sans CHRG)
 
 // Timing Constants
-#define BUTTON_DEBOUNCE_MS 50
+#define BUTTON_DEBOUNCE_MS 100
 #define LONG_PRESS_MS 1000
 #define FACTORY_RESET_MS 3000
 #define BATTERY_READ_INTERVAL_MS 10000
@@ -47,33 +41,48 @@
 #define MIDI_SERVICE_UUID        "03B80E5A-EDE8-4B33-A751-6CE34EC4C700"
 #define MIDI_CHARACTERISTIC_UUID "7772E5DB-3868-4112-A1A9-F2669D106BF3"
 
-// 7-Segment Display Pins Array
-const int segmentPins[] = {PIN_SEG_A, PIN_SEG_B, PIN_SEG_C, PIN_SEG_D, PIN_SEG_E, PIN_SEG_F, PIN_SEG_G};
-
-// 7-Segment Digit Patterns (Common Cathode)
-// Format: 0bGFEDCBA
-const byte digitPatterns[16] = {
-  0b00111111, // 0
-  0b00000110, // 1
-  0b01011011, // 2
-  0b01001111, // 3
-  0b01100110, // 4
-  0b01101101, // 5
-  0b01111101, // 6
-  0b00000111, // 7
-  0b01111111, // 8
-  0b01101111, // 9
-  0b01110111, // A (10)
-  0b01111100, // b (11)
-  0b00111001, // C (12)
-  0b01011110, // d (13)
-  0b01111001, // E (14)
-  0b01110001  // F (15)
+// 8x8 Matrix Display Patterns
+const byte digitPatterns_8x8[10][8] = {
+  // 0
+  {0b00111100, 0b01100110, 0b01101110, 0b01110110, 0b01100110, 0b01100110, 0b00111100, 0b00000000},
+  // 1  
+  {0b00011000, 0b00111000, 0b00011000, 0b00011000, 0b00011000, 0b00011000, 0b01111110, 0b00000000},
+  // 2
+  {0b00111100, 0b01100110, 0b00000110, 0b00001100, 0b00110000, 0b01100000, 0b01111110, 0b00000000},
+  // 3
+  {0b00111100, 0b01100110, 0b00000110, 0b00011100, 0b00000110, 0b01100110, 0b00111100, 0b00000000},
+  // 4
+  {0b00001100, 0b00011100, 0b00101100, 0b01001100, 0b01111110, 0b00001100, 0b00001100, 0b00000000},
+  // 5
+  {0b01111110, 0b01100000, 0b01111100, 0b00000110, 0b00000110, 0b01100110, 0b00111100, 0b00000000},
+  // 6
+  {0b00111100, 0b01100110, 0b01100000, 0b01111100, 0b01100110, 0b01100110, 0b00111100, 0b00000000},
+  // 7
+  {0b01111110, 0b00000110, 0b00001100, 0b00011000, 0b00110000, 0b00110000, 0b00110000, 0b00000000},
+  // 8
+  {0b00111100, 0b01100110, 0b01100110, 0b00111100, 0b01100110, 0b01100110, 0b00111100, 0b00000000},
+  // 9
+  {0b00111100, 0b01100110, 0b01100110, 0b00111110, 0b00000110, 0b01100110, 0b00111100, 0b00000000}
 };
 
-// Special Patterns
-#define PATTERN_P 0b01110011  // P pattern
-#define PATTERN_BLANK 0b00000000  // All segments off
+// Special patterns
+const byte batteryPatterns[6][8] = {
+  // Battery 0%
+  {0b11111111, 0b10000001, 0b10000001, 0b10000001, 0b10000001, 0b10000001, 0b10000001, 0b11111111},
+  // Battery 20%  
+  {0b11111111, 0b10000001, 0b10000001, 0b10000001, 0b10000001, 0b10000001, 0b11111111, 0b11111111},
+  // Battery 40%
+  {0b11111111, 0b10000001, 0b10000001, 0b10000001, 0b10000001, 0b11111111, 0b11111111, 0b11111111},
+  // Battery 60%
+  {0b11111111, 0b10000001, 0b10000001, 0b10000001, 0b11111111, 0b11111111, 0b11111111, 0b11111111},
+  // Battery 80%
+  {0b11111111, 0b10000001, 0b10000001, 0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111},
+  // Battery 100%
+  {0b11111111, 0b10000001, 0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111}
+};
+
+const byte pairingPattern[8] = {0b01110011, 0b01100110, 0b01100110, 0b01110011, 0b01100000, 0b01100000, 0b01100000, 0b00000000}; // P
+const byte channelCPattern[8] = {0b00111100, 0b01100110, 0b01100000, 0b01100000, 0b01100000, 0b01100110, 0b00111100, 0b00000000}; // C
 
 // Display Modes
 enum DisplayMode {
@@ -89,11 +98,11 @@ BLEServer* pServer = NULL;
 BLECharacteristic* pCharacteristic = NULL;
 bool deviceConnected = false;
 bool oldDeviceConnected = false;
+MD_MAX72XX mx = MD_MAX72XX(MD_MAX72XX::GENERIC_HW, MAX7219_CS, 1);
 
 // Function Prototypes
-void displaySegments(byte pattern);
+void displayMatrix(const byte pattern[8]);
 void displayDigit(int number);
-void displayHex(int number);
 void displayOff();
 void updateChannelDisplay();
 void showBatteryLevel();
@@ -108,6 +117,7 @@ void checkSleepTimeout();
 void enterDeepSleep();
 void sendMidiControlChange(uint8_t channel, uint8_t control, uint8_t value);
 void flashActivityLED();
+void connectionLightShow();
 
 // Button Structure
 struct Button {
@@ -136,8 +146,8 @@ bool isCharging = false;
 unsigned long lastActivityTime = 0;
 unsigned long lastBatteryReadTime = 0;
 unsigned long batteryDisplayEndTime = 0;
-unsigned long activityLEDOffTime = 0;
 unsigned long lastBlinkTime = 0;
+unsigned long activityLEDOffTime = 0;
 DisplayMode currentDisplayMode = MODE_PAIRING;
 bool blinkState = false;
 
@@ -145,21 +155,23 @@ bool blinkState = false;
 class MyServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) override {
       deviceConnected = true;
-      digitalWrite(PIN_LED_BLUETOOTH, HIGH);  // LED bleue fixe
-      // Passer du mode pairing au mode channel
-      currentDisplayMode = MODE_CHANNEL;
-      updateChannelDisplay();
       Serial.println("*** BLE DEVICE CONNECTED ***");
       Serial.print("Connected devices count: ");
       Serial.println(pServer->getConnectedCount());
+      
+      // Lancer le show de lumières de connexion
+      connectionLightShow();
+      
+      // Passer du mode pairing au mode channel
+      currentDisplayMode = MODE_CHANNEL;
+      updateChannelDisplay();
     };
 
     void onDisconnect(BLEServer* pServer) override {
       deviceConnected = false;
-      digitalWrite(PIN_LED_BLUETOOTH, LOW);
       Serial.println("*** BLE DEVICE DISCONNECTED ***");
       Serial.print("Reason: Connection timeout or client disconnect");
-      // Retourner en mode pairing
+      // Retourner en mode pairing avec LEDs alternées
       currentDisplayMode = MODE_PAIRING;
       Serial.println("BLE Disconnected - returning to pairing mode");
     }
@@ -168,30 +180,19 @@ class MyServerCallbacks: public BLEServerCallbacks {
 void setup() {
   Serial.begin(115200);
   
-  // Initialize 7-Segment Display Pins
-  for (int i = 0; i < 7; i++) {
-    pinMode(segmentPins[i], OUTPUT);
-    digitalWrite(segmentPins[i], LOW);
-  }
-  pinMode(PIN_SEG_DP, OUTPUT);
-  digitalWrite(PIN_SEG_DP, LOW);
+  // Initialize MAX7219 Matrix Display
+  mx.begin();            // Initialize MAX7219
+  mx.control(MD_MAX72XX::INTENSITY, 8);  // Set brightness (0-15)
+  mx.clear();            // Clear display
+  Serial.println("MAX7219 Matrix Display initialized");
   
   // Initialize LED Pins
-  pinMode(PIN_LED_POWER, OUTPUT);
-  pinMode(PIN_LED_BLUETOOTH, OUTPUT);
   pinMode(PIN_LED_CHARGING, OUTPUT);
   pinMode(PIN_LED_ACTIVITY, OUTPUT);
-  digitalWrite(PIN_LED_POWER, HIGH);
-  digitalWrite(PIN_LED_BLUETOOTH, LOW);
   digitalWrite(PIN_LED_CHARGING, LOW);
   digitalWrite(PIN_LED_ACTIVITY, LOW);
   
-  // Test LED bleue au démarrage (maintenant sur GPIO 2)
-  Serial.println("Testing Bluetooth LED on GPIO 2...");
-  digitalWrite(PIN_LED_BLUETOOTH, HIGH);
-  delay(1000);
-  digitalWrite(PIN_LED_BLUETOOTH, LOW);
-  Serial.println("Bluetooth LED test completed");
+  Serial.println("Hardware initialization completed");
   
   // Initialize Button Pins
   for (int i = 0; i < 6; i++) {
@@ -200,10 +201,10 @@ void setup() {
   
   // Initialize Analog Pins
   pinMode(PIN_BATTERY_VOLTAGE, INPUT);
-  pinMode(PIN_CHARGING_STATUS, INPUT_PULLUP);
+  // pinMode(PIN_CHARGING_STATUS, INPUT_PULLUP);  // Non utilisé (TC4056 4-pins)
   
   // Show startup pattern
-  displaySegments(PATTERN_P);
+  displayMatrix(pairingPattern);
   delay(500);
   displayOff();
   delay(200);
@@ -263,41 +264,52 @@ void setup() {
   // Start in pairing mode - show blinking P
   currentDisplayMode = MODE_PAIRING;
   Serial.println("Starting in pairing mode - P will blink until connected");
+  
+  
   lastActivityTime = millis();
 }
 
-// 7-Segment Display Functions
-void displaySegments(byte pattern) {
-  for (int i = 0; i < 7; i++) {
-    digitalWrite(segmentPins[i], (pattern >> i) & 0x01);
+// 8x8 Matrix Display Functions
+void displayMatrix(const byte pattern[8]) {
+  for (int i = 0; i < 8; i++) {
+    mx.setRow(i, pattern[i]);
   }
 }
 
 void displayDigit(int number) {
   if (number >= 0 && number <= 9) {
-    displaySegments(digitPatterns[number]);
+    displayMatrix(digitPatterns_8x8[number]);
   }
 }
 
-
 void displayOff() {
-  displaySegments(PATTERN_BLANK);
-  digitalWrite(PIN_SEG_DP, LOW);
+  mx.clear();
 }
 
 void updateChannelDisplay() {
-  // Affichage simplifié pour canaux 1-9 uniquement
-  displayDigit(midiChannel);
-  digitalWrite(PIN_SEG_DP, LOW);
+  // Affichage canal avec "C" suivi du numéro
+  if (midiChannel <= 9) {
+    // Afficher "C" + chiffre pour canaux 1-9
+    byte channelPattern[8];
+    // Combiner pattern "C" avec chiffre
+    for (int i = 0; i < 8; i++) {
+      channelPattern[i] = (channelCPattern[i] >> 1) | (digitPatterns_8x8[midiChannel][i] << 4);
+    }
+    displayMatrix(channelPattern);
+  } else {
+    // Pour canaux >9, afficher juste le chiffre
+    displayDigit(midiChannel);
+  }
 }
 
 void showBatteryLevel() {
   int batteryPercent = (int)((batteryVoltage - 3.0) / (4.2 - 3.0) * 100);
   batteryPercent = constrain(batteryPercent, 0, 100);
-  int displayLevel = batteryPercent / 10;
+  int batteryLevel = batteryPercent / 20;  // 0-5 levels
   
-  displayDigit(min(displayLevel, 9));
-  digitalWrite(PIN_SEG_DP, isCharging);
+  if (batteryLevel >= 0 && batteryLevel <= 5) {
+    displayMatrix(batteryPatterns[batteryLevel]);
+  }
 }
 
 void blinkDisplay() {
@@ -307,20 +319,56 @@ void blinkDisplay() {
     
     if (currentDisplayMode == MODE_PAIRING) {
       if (blinkState) {
-        displaySegments(PATTERN_P);
+        displayMatrix(pairingPattern);
+        // LEDs clignotent en alternance pendant le pairing
+        digitalWrite(PIN_LED_ACTIVITY, HIGH);
+        digitalWrite(PIN_LED_CHARGING, LOW);
       } else {
         displayOff();
+        // LEDs inversées
+        digitalWrite(PIN_LED_ACTIVITY, LOW);
+        digitalWrite(PIN_LED_CHARGING, HIGH);
       }
     }
   }
 }
 
 void flashActivityLED() {
-  // S'assurer que la LED est vraiment éteinte avant de l'allumer
-  digitalWrite(PIN_LED_ACTIVITY, LOW);
-  delay(1);  // Pause très courte
   digitalWrite(PIN_LED_ACTIVITY, HIGH);
-  activityLEDOffTime = millis() + ACTIVITY_LED_DURATION_MS;
+  activityLEDOffTime = millis() + 1000; // 1 seconde
+}
+
+void connectionLightShow() {
+  Serial.println("Starting connection LED light show...");
+  
+  // LEDs indépendantes qui se superposent naturellement
+  // LED jaune: 1x par seconde pendant 5 secondes = 5 flashs total
+  // LED verte: 3x par seconde pendant 5 secondes = 15 flashs total
+  
+  unsigned long startTime = millis();
+  unsigned long duration = 5000; // 5 secondes
+  
+  while (millis() - startTime < duration) {
+    unsigned long elapsed = millis() - startTime;
+    
+    // LED jaune : clignote toutes les 1000ms (1x par seconde)
+    unsigned long yellowCycle = elapsed % 1000;
+    bool yellowOn = (yellowCycle < 100); // Flash de 100ms
+    
+    // LED verte : clignote toutes les 333ms (3x par seconde)  
+    unsigned long greenCycle = elapsed % 333;
+    bool greenOn = (greenCycle < 100); // Flash de 100ms
+    
+    digitalWrite(PIN_LED_ACTIVITY, yellowOn ? HIGH : LOW);
+    digitalWrite(PIN_LED_CHARGING, greenOn ? HIGH : LOW);
+    
+    delay(10); // Petite pause pour la boucle
+  }
+  
+  // Éteindre toutes les LEDs
+  digitalWrite(PIN_LED_ACTIVITY, LOW);
+  digitalWrite(PIN_LED_CHARGING, LOW);
+  Serial.println("Connection LED light show complete");
 }
 
 // Battery and Charging Functions
@@ -355,22 +403,28 @@ void readBatteryVoltage() {
     lastBatteryDebug = millis();
   }
   
-  // Update charging LED
+  // Update charging LED - Only green LED for charging indication
   if (isCharging) {
     // En charge : LED verte clignotante
-    digitalWrite(PIN_LED_POWER, (millis() / 1000) % 2);
-    digitalWrite(PIN_LED_CHARGING, LOW);
-  } else if (batteryVoltage < 3.0) {
-    // LED rouge fixe - arrêt imminent
-    digitalWrite(PIN_LED_CHARGING, HIGH);
-    Serial.println("*** CRITICAL LOW BATTERY - SHUTDOWN IMMINENT ***");
-  } else if (batteryVoltage < 3.1) {
-    // LED rouge clignotante - batterie faible
     digitalWrite(PIN_LED_CHARGING, (millis() / 1000) % 2);
-    Serial.println("*** LOW BATTERY WARNING ***");
+  } else if (batteryVoltage > 4.1) {
+    // Charge terminée : LED verte fixe pendant 5 secondes
+    static unsigned long chargeCompleteTime = 0;
+    static bool wasCharging = false;
+    
+    if (wasCharging && !isCharging) {
+      chargeCompleteTime = millis();
+    }
+    
+    if (millis() - chargeCompleteTime < 5000) {
+      digitalWrite(PIN_LED_CHARGING, HIGH);
+    } else {
+      digitalWrite(PIN_LED_CHARGING, LOW);
+    }
+    
+    wasCharging = isCharging;
   } else {
-    // Fonctionnement normal : LED verte fixe, LED rouge éteinte
-    digitalWrite(PIN_LED_POWER, HIGH);
+    // Fonctionnement normal : LED éteinte
     digitalWrite(PIN_LED_CHARGING, LOW);
   }
 }
@@ -382,6 +436,10 @@ void handleButton(int index) {
   
   if (currentState != btn.lastState) {
     btn.lastDebounceTime = millis();
+    Serial.print("Button ");
+    Serial.print(index + 1);
+    Serial.print(" state change: ");
+    Serial.println(currentState == LOW ? "PRESSED" : "RELEASED");
   }
   
   if ((millis() - btn.lastDebounceTime) > BUTTON_DEBOUNCE_MS) {
@@ -389,14 +447,40 @@ void handleButton(int index) {
       btn.pressed = true;
       btn.pressTime = millis();
       lastActivityTime = millis();
+      Serial.print("Button ");
+      Serial.print(index + 1);
+      Serial.println(" press STARTED");
     } else if (currentState == HIGH && btn.pressed) {
       unsigned long pressDuration = millis() - btn.pressTime;
       
+      // Ignorer les pressions trop courtes (probable rebond)
+      if (pressDuration < 30) {
+        Serial.print("Button ");
+        Serial.print(index + 1);
+        Serial.println(" press too short - ignored");
+        btn.pressed = false;
+        btn.longPressed = false;
+        btn.lastState = currentState;
+        return;
+      }
+      
+      Serial.print("Button ");
+      Serial.print(index + 1);
+      Serial.print(" press ENDED (duration: ");
+      Serial.print(pressDuration);
+      Serial.println("ms)");
+      
       if (pressDuration >= LONG_PRESS_MS) {
         // Long press détecté au relâchement
+        Serial.print("Button ");
+        Serial.print(index + 1);
+        Serial.println(" -> LONG PRESS");
         handleLongPress(index);
       } else {
         // Short press au relâchement
+        Serial.print("Button ");
+        Serial.print(index + 1);
+        Serial.println(" -> SHORT PRESS");
         handleShortPress(index);
       }
       
@@ -416,13 +500,18 @@ void handleButton(int index) {
 }
 
 void handleShortPress(int index) {
+  Serial.print("handleShortPress called for button ");
+  Serial.println(index + 1);
+  
   // Check for button combinations
   if (buttons[0].pressed && buttons[1].pressed) {
+    Serial.println("Button combination B1+B2 -> Entering pairing mode");
     enterPairingMode();
     return;
   }
   
   if (buttons[2].pressed && buttons[3].pressed) {
+    Serial.println("Button combination B3+B4 -> Show battery level");
     // Show battery level for 3 seconds
     currentDisplayMode = MODE_BATTERY;
     batteryDisplayEndTime = millis() + BATTERY_DISPLAY_TIME_MS;
@@ -431,7 +520,15 @@ void handleShortPress(int index) {
   }
   
   // Send MIDI CC
+  Serial.print("Sending MIDI CC: Channel=");
+  Serial.print(midiChannel);
+  Serial.print(", CC#=");
+  Serial.print(ccNumbers[index]);
+  Serial.print(", Value=127");
+  Serial.println();
+  
   sendMidiControlChange(midiChannel - 1, ccNumbers[index], 127);
+  
   flashActivityLED();
 }
 
@@ -497,7 +594,8 @@ void enterPairingMode() {
 
 void factoryReset() {
   // Show E pattern for reset
-  displaySegments(digitPatterns[14]);  // E
+  byte resetPattern[8] = {0b01111110, 0b01100000, 0b01100000, 0b01111100, 0b01100000, 0b01100000, 0b01111110, 0b00000000}; // E
+  displayMatrix(resetPattern);
   delay(1000);
   
   preferences.clear();
@@ -524,8 +622,6 @@ void checkSleepTimeout() {
 
 void enterDeepSleep() {
   displayOff();
-  digitalWrite(PIN_LED_POWER, LOW);
-  digitalWrite(PIN_LED_BLUETOOTH, LOW);
   digitalWrite(PIN_LED_CHARGING, LOW);
   digitalWrite(PIN_LED_ACTIVITY, LOW);
   
@@ -555,6 +651,7 @@ void loop() {
     if (millis() > batteryDisplayEndTime) {
       currentDisplayMode = MODE_CHANNEL;
       updateChannelDisplay();
+    flashActivityLED();
     } else {
       showBatteryLevel();
     }

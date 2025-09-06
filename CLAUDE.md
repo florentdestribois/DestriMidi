@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is an ESP32-based Bluetooth MIDI pedal controller project using Arduino framework. The system sends MIDI Control Change (CC) messages over Bluetooth Low Energy (BLE) and includes battery management, 7-segment display, and configurable MIDI channels.
+This is an ESP32-based Bluetooth MIDI pedal controller project using Arduino framework. The system sends MIDI Control Change (CC) messages over Bluetooth Low Energy (BLE) and includes battery management, 8x8 LED matrix display (MAX7219), and configurable MIDI channels.
 
 ## Development Environment
 
@@ -16,7 +16,7 @@ This is an ESP32-based Bluetooth MIDI pedal controller project using Arduino fra
 ### Required Libraries
 - ESP32 BLE libraries (included with framework)
 - Standard Arduino GPIO libraries (included)
-- No additional libraries required for 7-segment display
+- MD_MAX72XX@^3.3.0 (8x8 LED matrix display control)
 
 ## Build and Upload Commands
 
@@ -33,8 +33,8 @@ This is an ESP32-based Bluetooth MIDI pedal controller project using Arduino fra
 ### Modular Design
 The codebase uses a modular architecture with separate managers for each subsystem:
 
-- **src/main.cpp**: Main application with 7-segment display control and BLE MIDI
-- **7-Segment Display Functions**: Direct GPIO control for segments A-G and decimal point
+- **src/main.cpp**: Main application with 8x8 LED matrix display control and BLE MIDI
+- **8x8 Matrix Display Functions**: MAX7219 controlled via MD_MAX72XX library (3 GPIO: DIN, CLK, CS)
 - **Button Handling**: Debouncing, long-press detection, and button combinations
 - **Battery Management**: ADC voltage reading with charging status detection
 - **BLE MIDI Protocol**: Standard MIDI service with 5-byte packet format
@@ -44,24 +44,26 @@ The codebase uses a modular architecture with separate managers for each subsyst
 
 1. **Event-Driven Button Handling**: ButtonManager returns events (press/release/long-press) rather than states, allowing the main loop to handle complex combinations.
 
-2. **7-Segment Display Control**: Direct GPIO manipulation with digit patterns for 0-F, special patterns for pairing mode and battery display.
+2. **8x8 Matrix Display Control**: MAX7219 driver with custom 8x8 patterns for digits 0-9, battery level bargraph, and pairing mode display.
 
 3. **BLE MIDI Protocol**: Uses standard MIDI service UUID (03B80E5A-EDE8-4B33-A751-6CE34EC4C700) with 5-byte packet format for compatibility with DAWs.
 
 4. **Power Management**: Implements deep sleep with GPIO wake-up to maximize battery life when inactive.
 
 ### Critical Pin Assignments
-- **7-Segment Display**: A=GPIO21, B=GPIO22, C=GPIO19, D=GPIO23, E=GPIO18, F=GPIO5, G=GPIO17, DP=GPIO16
-- **Buttons**: GPIO32-33 (1-2), GPIO25-26 (3-4), GPIO27,14 (5-6)
-- **LEDs**: Power=GPIO12, Bluetooth=GPIO13, Charging=GPIO15, Activity=GPIO4
-- **Battery ADC**: GPIO34 (with 1:2 voltage divider)
-- **Charge Status**: GPIO35 (from TC4056)
+- **8x8 Matrix Display**: DIN=GPIO21, CLK=GPIO18, CS=GPIO19 (MAX7219)
+- **Buttons**: GPIO32-33 (1-2), GPIO25-26 (3-4), GPIO27,14 (5-6) 
+- **LEDs**: Charging=GPIO15 (green), Activity=GPIO4 (orange, 1s flash)
+- **Battery ADC**: GPIO35 (with 1:2 voltage divider)  
+- **Available GPIOs**: 0,23,22,5,17,16,12,2,34 (freed from old 7-segment + LEDs)
 
 ## Testing and Debugging
 
-### 7-Segment Display Testing
-If display issues occur, test individual segments by setting GPIO pins HIGH/LOW.
-Verify common cathode connection to ground and check pin assignments in main.cpp.
+### 8x8 Matrix Display Testing
+If display issues occur:
+1. Check SPI connections: DIN=GPIO21, CLK=GPIO18, CS=GPIO19
+2. Verify MAX7219 power supply (3.3V or 5V)
+3. Test with simple pattern: `mx.setRow(0, 0xFF)` should light up top row
 
 ### Serial Debug Output
 The code includes extensive Serial.print debugging at 115200 baud. Monitor for:
@@ -77,6 +79,13 @@ The code includes extensive Serial.print debugging at 115200 baud. Monitor for:
 - **Battery Voltage**: 3.0-4.2V range, divided to 1.5-2.1V for ADC
 
 ## Common Modifications
+
+### Display Patterns
+- **MIDI Channel**: Shows "C" + digit (e.g., "C1", "C5")
+- **Battery Level**: Horizontal bargraph with 6 levels (0-100%)
+- **Pairing Mode**: Blinking "P" pattern + alternating LEDs (green/orange)
+- **Connection Show**: Musical light sequence (5 seconds) - yellow 1x/sec, green 3x/sec
+- **Charge Status**: Green LED blinks during charge, solid when complete
 
 ### Changing MIDI CC Numbers
 Edit the `ccNumbers[6]` array initialization in src/main.cpp (default: {1, 2, 3, 4, 5, 6})
